@@ -1,0 +1,8 @@
+{
+  "agent_teams": false,
+  "node": true,
+  "codex": true,
+  "gemini": true,
+  "issues": ["Agent Teams not enabled — most ae commands require it. Add to ~/.claude/settings.json: { "experiments": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": true } }"],
+  "checked_at": "2026-03-24T23:17:23Z"
+}

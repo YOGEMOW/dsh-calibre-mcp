@@ -1,0 +1,17 @@
+project:
+  name: calibre-mcp
+  type: python
+
+test:
+  command: ""
+
+lint:
+  command: ""
+
+output:
+  discussions: "docs/discussions/"
+  plans: "docs/plans/"
+  milestones: "docs/milestones/"
+  backlog: "docs/backlog/"
+  reviews: "docs/reviews/"
+  analyses: "docs/analyses/"

@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "ae@agentic-engineering": true
+  },
+  "extraKnownMarketplaces": {
+    "agentic-engineering": {
+      "source": {
+        "source": "github",
+        "repo": "xmkevinchen/agentic-engineering"
+      }
+    }
+  }
+}
