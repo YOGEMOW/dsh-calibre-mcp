@@ -42,6 +42,18 @@ python E:\DSH-workspace\calibre-mcp\server.py
 | delete_book | 移除书籍（默认进 Calibre 回收站，permanent 为不可恢复） |
 | convert_book | 转格式（epub/azw3/mobi/pdf...）并加入该书 |
 | get_library_stats | 藏书量与按格式计数 |
+| open_book | 在本机打开某本书阅读（reader='auto' 系统默认应用 / 'calibre' 内置阅读器） |
+| read_book_text | 抽取书正文供 AI 阅读/总结/问答（EPUB 直读，其他格式转换；offset/max_chars 分页） |
+
+## 阅读书籍（DSH 内两种用法）
+
+1. **您自己读**：对 DSH 说"打开《xxx》阅读"→ 模型调用
+   `open_book`（先 `search_books` 定位）→ 本机弹出阅读器。
+2. **AI 读给您**：说"帮我总结《xxx》"、"这本书讲什么" → 模型调用
+   `read_book_text` 抽取正文后在会话中回答，支持 `offset` 连续翻页。
+
+注意：`open_book` 的 `reader='calibre'` 直接起 Calibre 内置阅读器（不依赖默认关联）；
+Calibre GUI 常驻时，系统会把打开请求转交给已在运行的 GUI 实例。
 
 ## DSH 接入（已完成）
 

@@ -11,23 +11,29 @@ CALIBRE_LIBRARY_PATH / CALIBREDB_PATH 始终优先。
 stdout 只输出协议消息；诊断与日志一律走 stderr。
 """
 
+import html.parser
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 
 DEFAULT_LIBRARY = r"G:\Calibre 书库"
 CALIBREDB_EXE = r"C:\Program Files\Calibre2\calibredb.exe"
 EBOOK_CONVERT_EXE = r"C:\Program Files\Calibre2\ebook-convert.exe"
+EBOOK_VIEWER_EXE = r"C:\Program Files\Calibre2\ebook-viewer.exe"
 
 LIBRARY_PATH = os.environ.get("CALIBRE_LIBRARY_PATH") or DEFAULT_LIBRARY
 CALIBREDB = os.environ.get("CALIBREDB_PATH") or (CALIBREDB_EXE if os.path.exists(CALIBREDB_EXE) else "calibredb")
 EBOOK_CONVERT = os.environ.get("EBOOK_CONVERT_PATH") or EBOOK_CONVERT_EXE
+EBOOK_VIEWER = os.environ.get("EBOOK_VIEWER_PATH") or EBOOK_VIEWER_EXE
 
 SERVER_NAME = "calibre-mcp"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 
 # 搜索/列表返回的默认字段（id 恒在首位）
 SEARCH_FIELDS = "id,title,authors,series,series_index,rating,tags,publisher,formats,pubdate"
@@ -270,6 +276,170 @@ def tool_get_library_stats() -> str:
     return json_ok({"total_books": count, "by_format": by_format})
 
 
+def _book_formats(book_id: int) -> tuple[str | None, list[str]]:
+    """返回 (title, formats)；找不到或查询失败时返回 (None, [])。"""
+    rc, out, err = calibredb("list", "--for-machine", "--fields", "title,formats", "--search", f"id:{book_id}")
+    if rc != 0:
+        return None, []
+    try:
+        books = json.loads(out) if out.strip() else []
+    except json.JSONDecodeError:
+        return None, []
+    if not books:
+        return None, []
+    return books[0].get("title"), books[0].get("formats") or []
+
+
+def _open_path(path: str) -> None:
+    """用系统默认应用打开文件（跨平台 ShellExecute 风格）。"""
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+class _TextExtractor(html.parser.HTMLParser):
+    """从 XHTML 片段中抽取纯文本（忽略 script/style，块级元素换行）。"""
+
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._skip += 1
+        if tag in ("p", "div", "li", "h1", "h2", "h3", "h4", "tr", "blockquote", "section", "br"):
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+        if tag in ("p", "div", "li", "h1", "h2", "h3", "h4", "tr", "blockquote"):
+            self._parts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        lines = [re.sub(r"\s+", " ", line).strip() for line in "".join(self._parts).splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def _epub_text(path: str) -> str:
+    """从 EPUB 文件按 spine 顺序提取正文文本（零第三方依赖）。"""
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        opf = None
+        for n in names:
+            if n.lower() == "meta-inf/container.xml":
+                root = ET.fromstring(z.read(n))
+                for rf in root.iter():
+                    if rf.tag.endswith("rootfile"):
+                        opf = rf.get("full-path")
+                        break
+                break
+        if not opf:
+            opf = next((n for n in names if n.lower().endswith(".opf")), None)
+        if not opf:
+            raise RuntimeError("此 EPUB 缺少 OPF 描述文件")
+        opf_root = ET.fromstring(z.read(opf))
+        base = posixpath.dirname(opf)
+        manifest: dict[str, str] = {}
+        for it in opf_root.iter():
+            if it.tag.endswith("item") and it.get("href") and it.get("id"):
+                manifest[it.get("id")] = it.get("href")
+        order = []
+        for s in opf_root.iter():
+            if s.tag.endswith("itemref") and s.get("idref") and s.get("idref") in manifest:
+                order.append(manifest[s.get("idref")])
+        chunks: list[str] = []
+        for href in order:
+            p = posixpath.normpath(posixpath.join(base, href))
+            if p not in names or not href.lower().endswith((".html", ".htm", ".xhtml")):
+                continue
+            raw = z.read(p)
+            try:
+                data = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                data = raw.decode("gbk", errors="replace")
+            ex = _TextExtractor()
+            ex.feed(data)
+            txt = ex.text()
+            if txt:
+                chunks.append(txt)
+        return "\n\n".join(chunks)
+
+
+def tool_open_book(book_id: int, reader: str = "auto") -> str:
+    """在电脑上打开某本书开始阅读。reader='auto' 用系统默认关联应用；'calibre' 用 Calibre 内置阅读器。"""
+    title, formats = _book_formats(book_id)
+    if not formats:
+        return (f"未找到 id={book_id} 的书籍或该书没有任何格式文件。" if title is None
+                else f"《{title}》（id={book_id}）没有任何格式文件。")
+    path = next((f for f in formats if f.lower().endswith((".epub", ".pdf"))), formats[0])
+    if reader == "calibre":
+        if os.path.exists(EBOOK_VIEWER):
+            subprocess.Popen([EBOOK_VIEWER, path])
+        else:
+            return f"未找到 Calibre 阅读器（{EBOOK_VIEWER}），请改用 reader='auto' 或安装 Calibre。"
+    else:
+        try:
+            _open_path(path)
+        except OSError as e:
+            return f"打开失败：{e}"
+    return f"已调用阅读器打开：{path}（id={book_id}）"
+
+
+def tool_read_book_text(book_id: int, offset: int = 0, max_chars: int = 30000) -> str:
+    """抽取书正文文本供阅读/总结/问答。EPUB 直接解析；其他格式经 ebook-convert 转文本。
+    分页读取：每次返回 [offset, offset+max_chars) 区间，末尾注明总长度与续读方式。"""
+    title, formats = _book_formats(book_id)
+    if not formats:
+        return f"未找到 id={book_id} 的书籍或该书没有任何格式文件。"
+    path = next((f for f in formats if f.lower().endswith(".epub")), formats[0])
+    ext = path.lower().rsplit(".", 1)[-1]
+    if ext == "epub":
+        try:
+            text = _epub_text(path)
+        except Exception as e:
+            return f"EPUB 解析失败：{e}"
+    elif ext in ("txt", "text", "md"):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            return f"读取文件失败：{e}"
+    else:
+        workdir = tempfile.mkdtemp(prefix="calibre-mcp-")
+        dst = os.path.join(workdir, "converted.txt")
+        rc, out, err = run([EBOOK_CONVERT, path, dst], timeout=600)
+        if rc != 0:
+            return f"转换正文失败：{err or out or rc}"
+        try:
+            with open(dst, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        finally:
+            try:
+                os.remove(dst)
+                os.rmdir(workdir)
+            except OSError:
+                pass
+    offset = max(0, int(offset))
+    max_chars = max(100, min(int(max_chars), 80000))
+    total = len(text)
+    body = text[offset:offset + max_chars]
+    note = f"\n\n——（《{title or path}》共约 {total} 字，已显示第 {offset}-{offset + len(body)} 字）"
+    if offset + len(body) < total:
+        note += f"；继续读取请用 offset={offset + len(body)} 再次调用 read_book_text。"
+    if not body:
+        body = "(此区间无文本，可能超出正文长度或该格式没有文本层。)"
+    return body + note
+
+
 # ---------------------------------------------------------------- 工具注册表
 
 TOOLS: dict[str, tuple[str, dict]] = {
@@ -352,6 +522,21 @@ TOOLS: dict[str, tuple[str, dict]] = {
         "书库统计：藏书总量与按格式计数。",
         {"type": "object", "properties": {}},
     ),
+    "open_book": (
+        "在电脑上打开某本书开始阅读（reader 默认 'auto' 用系统默认关联应用；'calibre' 用 Calibre 内置阅读器）。",
+        {"type": "object", "properties": {
+            "book_id": {"type": "integer"},
+            "reader": {"type": "string", "description": "auto（默认）或 calibre"},
+        }, "required": ["book_id"]},
+    ),
+    "read_book_text": (
+        "抽取某本书的正文文本供阅读/总结/问答（EPUB 直接解析，其他格式经 ebook-convert 转换；支持 offset/max_chars 分页）。",
+        {"type": "object", "properties": {
+            "book_id": {"type": "integer"},
+            "offset": {"type": "integer", "description": "按字符偏移续读，默认 0"},
+            "max_chars": {"type": "integer", "description": "本次最多返回字符数，默认 30000，上限 80000"},
+        }, "required": ["book_id"]},
+    ),
 }
 
 HANDLERS = {
@@ -366,6 +551,8 @@ HANDLERS = {
     "delete_book": tool_delete_book,
     "convert_book": tool_convert_book,
     "get_library_stats": tool_get_library_stats,
+    "open_book": tool_open_book,
+    "read_book_text": tool_read_book_text,
 }
 
 

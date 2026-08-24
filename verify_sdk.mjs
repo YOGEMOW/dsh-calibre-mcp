@@ -26,7 +26,10 @@ for (const c of r.content) console.log(String(c.text).slice(0, 1500));
 const stats = await client.callTool({ name: 'get_library_stats', arguments: {} });
 console.log('STATS:', stats.content[0].text);
 
-const allText = JSON.stringify([r, stats].map((x) => x.content[0].text));
+const read = await client.callTool({ name: 'read_book_text', arguments: { book_id: 1, max_chars: 400 } });
+console.log('READ_TEXT:', String(read.content[0].text).slice(0, 300));
+
+const allText = JSON.stringify([r, stats, read].map((x) => x.content[0].text));
 console.log('NO_REPLACEMENT_CHARS:', !allText.includes('\ufffd'));
 
 await client.close();
