@@ -67,7 +67,7 @@ def run(args: list[str], timeout: int = 120) -> tuple[int, str, str]:
 
 def calibredb(subcommand: str, *args: str, timeout: int = 120) -> tuple[int, str, str]:
     rc, out, err = run([CALIBREDB, "--with-library", LIBRARY_PATH, subcommand, *args], timeout=timeout)
-    if rc != 0 and re.search(r"另一个.?calibre|another calibre", f"{out}\n{err}", re.I):
+    if rc != 0 and re.search(r"另一个.{0,8}calibre|another calibre", f"{out}\n{err}", re.I):
         err = ("Calibre 主程序（GUI/服务器）正在使用该书库，calibredb 已拒绝并行访问。"
                "请先关闭 Calibre 再重试；如需 GUI 常驻，可改用 Calibre 内容服务器（calibredb "
                "支持 --with-library http://host:port/#library_id，届时在本文件的 "
