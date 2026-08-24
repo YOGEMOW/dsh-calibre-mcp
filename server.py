@@ -400,7 +400,11 @@ def tool_read_book_text(book_id: int, offset: int = 0, max_chars: int = 30000) -
     title, formats = _book_formats(book_id)
     if not formats:
         return f"未找到 id={book_id} 的书籍或该书没有任何格式文件。"
-    path = next((f for f in formats if f.lower().endswith(".epub")), formats[0])
+    path = next((f for f in formats if f.lower().endswith(".epub")), None)
+    if not path:
+        path = next((f for f in formats if f.lower().endswith((".txt", ".md"))), None)
+    if not path:
+        path = formats[0]
     ext = path.lower().rsplit(".", 1)[-1]
     if ext == "epub":
         try:
