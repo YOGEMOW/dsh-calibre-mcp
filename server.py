@@ -290,6 +290,25 @@ def _book_formats(book_id: int) -> tuple[str | None, list[str]]:
     return books[0].get("title"), books[0].get("formats") or []
 
 
+def _default_app_available(path: str) -> bool:
+    """检测该文件格式是否已登记默认打开方式（Windows 注册表 UserChoice）。
+
+    没有登记时 os.startfile 会弹出『你要如何打开此文件/选择应用』对话框；
+    AI 连续打开多本书时任务栏会堆一长串 OpenWith 窗口。
+    """
+    if sys.platform != "win32":
+        return True
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        import winreg
+        key = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            winreg.QueryValueEx(k, "ProgId")
+        return True
+    except OSError:
+        return False
+
+
 def _open_path(path: str) -> None:
     """用系统默认应用打开文件（跨平台 ShellExecute 风格）。"""
     if sys.platform == "win32":
@@ -387,6 +406,14 @@ def tool_open_book(book_id: int, reader: str = "auto") -> str:
         else:
             return f"未找到 Calibre 阅读器（{EBOOK_VIEWER}），请改用 reader='auto' 或安装 Calibre。"
     else:
+        if not _default_app_available(path):
+            if os.path.exists(EBOOK_VIEWER):
+                subprocess.Popen([EBOOK_VIEWER, path])
+                return (f"该格式（{os.path.splitext(path)[1] or '未知'}）无默认关联应用，"
+                        f"已改用 Calibre 阅读器打开：{path}（id={book_id}）")
+            return (f"该格式（{os.path.splitext(path)[1] or '未知'}）无默认关联应用，"
+                    f"且未找到 Calibre 阅读器（{EBOOK_VIEWER}），"
+                    f"请改用 reader='calibre' 或安装 Calibre。")
         try:
             _open_path(path)
         except OSError as e:
