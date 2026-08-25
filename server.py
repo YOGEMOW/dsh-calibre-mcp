@@ -613,8 +613,12 @@ def handle_request(req: dict) -> None:
 
 def main() -> None:
     log(f"书库={LIBRARY_PATH}")
-    for line in sys.stdin:
-        line = line.strip()
+    stdin = sys.stdin.buffer  # 按字节读：客户端一律发 UTF-8，Windows 文本模式默认 GBK 会乱码
+    for raw in stdin:
+        try:
+            line = raw.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            line = raw.decode("gbk", errors="replace").strip()
         if not line:
             continue
         try:
